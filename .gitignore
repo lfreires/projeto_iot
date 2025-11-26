@@ -1,0 +1,31 @@
+# Root environment files
+.env
+.env.*
+
+# Python / backend artifacts
+backend/.env
+backend/.env.*
+backend/certs/
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/**/*.pyc
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+# Expo / React Native (front)
+front/node_modules/
+front/dist/
+front/.expo/
+front/.expo-shared/
+front/.env*
+front/.cache/
+front/.DS_Store
+front/android/
+front/ios/
+
+# IDE / OS files
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db

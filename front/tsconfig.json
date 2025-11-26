@@ -1,0 +1,15 @@
+{
+  "extends": "@tsconfig/react-native/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "allowJs": false,
+    "noEmit": true,
+    "jsx": "react-jsx",
+  "module": "node16",
+  "moduleResolution": "node16",
+    "lib": ["dom", "es2017"],
+    "types": ["react", "react-native"]
+  },
+  "include": ["App.tsx", "src"],
+  "exclude": ["node_modules"]
+}
