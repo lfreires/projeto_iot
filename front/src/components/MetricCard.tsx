@@ -8,15 +8,10 @@ interface MetricCardProps {
   label: string;
   value: string;
   unit?: string;
-  trend?: 'up' | 'down' | 'stable';
   icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
 }
 
-export function MetricCard({ label, value, unit, icon, trend = 'stable' }: MetricCardProps) {
-  const trendColor = trend === 'up' ? colors.success : trend === 'down' ? colors.warning : colors.textMuted;
-  const trendIcon: ComponentProps<typeof MaterialCommunityIcons>['name'] =
-    trend === 'up' ? 'arrow-up' : trend === 'down' ? 'arrow-down' : 'minus';
-
+export function MetricCard({ label, value, unit, icon }: MetricCardProps) {
   return (
     <View style={styles.card}>
       <View style={styles.iconWrapper}>
@@ -26,10 +21,6 @@ export function MetricCard({ label, value, unit, icon, trend = 'stable' }: Metri
       <View style={styles.valueRow}>
         <Text style={styles.value}>{value}</Text>
         {unit ? <Text style={styles.unit}>{unit}</Text> : null}
-      </View>
-      <View style={styles.trendRow}>
-  <MaterialCommunityIcons name={trendIcon} size={16} color={trendColor} />
-        <Text style={[styles.trendLabel, { color: trendColor }]}>Status</Text>
       </View>
     </View>
   );
@@ -75,14 +66,5 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     fontSize: typography.body,
     color: colors.textMuted,
-  },
-  trendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  trendLabel: {
-    marginLeft: 4,
-    fontSize: typography.caption,
   },
 });

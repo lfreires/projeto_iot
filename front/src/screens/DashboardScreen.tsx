@@ -7,18 +7,24 @@ import { MetricCard } from '../components/MetricCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { InfoRow } from '../components/InfoRow';
 import { useHeartbeat } from '../hooks/useHeartbeat';
-import { Command, sendCommand } from '../services/api';
+import { Command, VaralMode, sendCommand } from '../services/api';
 import { colors, spacing, typography } from '../theme';
 import { formatHumidity, formatRelativeTime, formatTemperature, formatUptime } from '../utils/format';
 
 type IconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
+
+const COMMAND_TO_MODE: Record<Command, VaralMode> = {
+  AUTO: 'AUTO',
+  OPEN: 'FORCE_OPEN',
+  CLOSE: 'FORCE_CLOSE',
+};
 
 const CONTROL_COMMANDS: Array<{
   command: Command;
   label: string;
   description: string;
   icon: IconName;
-  matchMode: 'AUTO' | 'FORCE_OPEN' | 'FORCE_CLOSE';
+  matchMode: VaralMode;
 }> = [
   {
     command: 'AUTO',
@@ -46,44 +52,81 @@ const CONTROL_COMMANDS: Array<{
 export default function DashboardScreen() {
   const { data, loading, refresh, lastUpdatedLabel, connectionState } = useHeartbeat(true);
   const [commandLoading, setCommandLoading] = useState<Command | null>(null);
-  const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
-  const [commandError, setCommandError] = useState<string | null>(null);
+  const [optimisticMode, setOptimisticMode] = useState<VaralMode | null>(null);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [pendingModeCommandAt, setPendingModeCommandAt] = useState<number | null>(null);
+  const [awaitingHeartbeatAck, setAwaitingHeartbeatAck] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const contentOpacity = useRef(new Animated.Value(0)).current;
   const feedbackOpacity = useRef(new Animated.Value(0)).current;
+  const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     Animated.timing(contentOpacity, {
-      toValue: data ? 1 : 0.65,
+      toValue: data ? (loading ? 0.85 : 1) : 0.65,
       duration: 350,
       useNativeDriver: true,
     }).start();
-  }, [contentOpacity, data]);
+  }, [contentOpacity, data, loading]);
 
   useEffect(() => {
+    if (!feedback) {
+      return undefined;
+    }
+
+    feedbackOpacity.setValue(0);
     Animated.timing(feedbackOpacity, {
-      toValue: commandFeedback || commandError ? 1 : 0,
+      toValue: 1,
       duration: 200,
       useNativeDriver: true,
     }).start();
-  }, [commandError, commandFeedback, feedbackOpacity]);
 
-  useEffect(() => {
-    if (!commandFeedback && !commandError) {
-      return undefined;
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
     }
-    const timeout = setTimeout(() => {
-      setCommandFeedback(null);
-      setCommandError(null);
-    }, 4000);
-    return () => clearTimeout(timeout);
-  }, [commandError, commandFeedback]);
+    feedbackTimerRef.current = setTimeout(() => {
+      feedbackTimerRef.current = null;
+      Animated.timing(feedbackOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) {
+          setFeedback(null);
+        }
+      });
+    }, 3500);
+
+    return () => {
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = null;
+      }
+    };
+  }, [feedback, feedbackOpacity]);
 
   const rainStatus = data?.rain ? 'Chuva detectada' : 'Tempo seco';
   const rainBadgeType = data?.rain ? 'alert' : 'safe';
   const uptime = formatUptime(data?.uptime_ms);
-  const lastMessageRelative = useMemo(() => (data?.received_at ? formatRelativeTime(data.received_at) : null), [data?.received_at]);
-  const refreshing = loading && Boolean(data);
+  const lastMessageRelative = useMemo(() => (data?.received_at ? formatRelativeTime(data?.received_at) : null), [data?.received_at]);
+
+  const lastHeartbeatMs = data?.received_at ? data.received_at * 1000 : null;
+  const hasHeartbeatData = Boolean(lastHeartbeatMs);
+  const usingHistoricData = connectionState === 'offline' || connectionState === 'stale' || !hasHeartbeatData;
+
+  useEffect(() => {
+    if (!pendingModeCommandAt) {
+      return;
+    }
+    if (!lastHeartbeatMs || lastHeartbeatMs < pendingModeCommandAt) {
+      return;
+    }
+
+    setPendingModeCommandAt(null);
+    setOptimisticMode(null);
+    setAwaitingHeartbeatAck(false);
+  }, [lastHeartbeatMs, pendingModeCommandAt]);
 
   const connectionMeta = useMemo(() => {
     switch (connectionState) {
@@ -118,10 +161,25 @@ export default function DashboardScreen() {
     }
   }, [connectionState, lastMessageRelative]);
 
-  const currentMode = data?.mode ?? null;
+  const isOffline = connectionState === 'offline';
+  const isStale = connectionState === 'stale';
+  const lastUpdatedMessage = lastUpdatedLabel.includes('Atualizado')
+    ? lastUpdatedLabel
+    : `Atualizado: ${lastUpdatedLabel}`;
+  const lastUpdatedBadge = {
+    label: lastUpdatedMessage,
+    type: (isOffline || isStale ? 'alert' : 'info') as 'alert' | 'info',
+    icon: (isOffline ? 'wifi-off' : isStale ? 'clock-alert' : 'clock-outline') as IconName,
+  };
+  const shouldShowOptimisticMode = Boolean(
+    optimisticMode && pendingModeCommandAt !== null && (!lastHeartbeatMs || lastHeartbeatMs < pendingModeCommandAt),
+  );
+
+  const currentMode = shouldShowOptimisticMode ? optimisticMode : data?.mode ?? null;
 
   const modeLabel = useMemo(() => {
-    switch (data?.mode) {
+    const mode = currentMode;
+    switch (mode) {
       case 'AUTO':
         return 'Automático';
       case 'FORCE_OPEN':
@@ -131,29 +189,53 @@ export default function DashboardScreen() {
       default:
         return '—';
     }
-  }, [data?.mode]);
+  }, [currentMode]);
 
   const handleSendCommand = useCallback(async (command: Command) => {
     if (commandLoading) {
       return;
     }
-    setCommandError(null);
-    setCommandFeedback(null);
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    setFeedback(null);
+    feedbackOpacity.stopAnimation();
+    feedbackOpacity.setValue(0);
     setCommandLoading(command);
+    const targetMode = COMMAND_TO_MODE[command];
+    setOptimisticMode(targetMode);
+    setPendingModeCommandAt(Date.now());
+    setAwaitingHeartbeatAck(true);
     try {
       await sendCommand(command);
-      setCommandFeedback('Comando enviado com sucesso');
+      setFeedback({ type: 'success', message: 'Comando enviado com sucesso' });
       await refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao enviar comando';
-      setCommandError(message);
+      setFeedback({ type: 'error', message });
+      setOptimisticMode(null);
+      setPendingModeCommandAt(null);
+      setAwaitingHeartbeatAck(false);
     } finally {
       setCommandLoading(null);
     }
-  }, [commandLoading, refresh]);
+  }, [commandLoading, refresh, feedbackOpacity]);
 
-  const hasFeedback = Boolean(commandFeedback || commandError);
-  const feedbackPalette = commandError
+  const handleManualRefresh = useCallback(async () => {
+    if (manualRefreshing) {
+      return;
+    }
+    setManualRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [manualRefreshing, refresh]);
+
+  const hasFeedback = Boolean(feedback);
+  const feedbackPalette = feedback?.type === 'error'
     ? { backgroundColor: '#FEE4E2', borderColor: '#FDA29B', color: colors.danger, icon: 'alert-circle' as IconName }
     : { backgroundColor: '#DCFCE7', borderColor: '#86EFAC', color: colors.success, icon: 'check-circle' as IconName };
 
@@ -162,11 +244,20 @@ export default function DashboardScreen() {
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />}
+        refreshControl={
+          <RefreshControl refreshing={manualRefreshing} onRefresh={handleManualRefresh} tintColor={colors.primary} />
+        }
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Varal inteligente</Text>
-          <Text style={styles.subtitle}>{lastUpdatedLabel}</Text>
+          <View style={styles.headerTitleRow}>
+            <Text style={styles.title}>Varal inteligente</Text>
+            <StatusBadge
+              label={lastUpdatedBadge.label}
+              type={lastUpdatedBadge.type}
+              icon={lastUpdatedBadge.icon}
+              style={styles.inlineBadge}
+            />
+          </View>
           <View style={styles.headerBadges}>
             <StatusBadge
               label={rainStatus}
@@ -180,88 +271,87 @@ export default function DashboardScreen() {
             />
           </View>
         </View>
-
-        <Animated.View style={[styles.metricsRow, { opacity: contentOpacity }]}>
+        <Animated.View style={[styles.metricsRow, { opacity: contentOpacity }]}> 
           <MetricCard
             label="Temperatura"
             value={formatTemperature(data?.temp_c)}
             unit="ºC"
             icon="thermometer"
-            trend="stable"
           />
           <MetricCard
             label="Umidade"
             value={formatHumidity(data?.humidity)}
             unit="%"
             icon="water-percent"
-            trend="stable"
           />
         </Animated.View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Detalhes</Text>
+          <Text style={styles.sectionTitle}>{usingHistoricData ? 'Últimos detalhes lidos' : 'Detalhes'}</Text>
           <View style={styles.card}>
-            <InfoRow label="Uptime" value={uptime} />
-            <InfoRow label="Chuva" value={data?.rain ? 'Sim' : 'Não'} />
-            <InfoRow label="Modo atual" value={modeLabel} />
-            <InfoRow label="Temperatura" value={`${formatTemperature(data?.temp_c)} ºC`} />
-            <InfoRow label="Umidade" value={`${formatHumidity(data?.humidity)} %`} />
+            <InfoRow label={usingHistoricData ? 'Último uptime registrado' : 'Uptime'} value={uptime} />
+            <InfoRow label={usingHistoricData ? 'Último status de chuva' : 'Chuva'} value={data?.rain ? 'Sim' : 'Não'} />
+            <InfoRow label={usingHistoricData ? 'Último modo' : 'Modo atual'} value={modeLabel} />
+            <InfoRow label={usingHistoricData ? 'Última temperatura lida' : 'Temperatura'} value={`${formatTemperature(data?.temp_c)} ºC`} />
+            <InfoRow label={usingHistoricData ? 'Última umidade lida' : 'Umidade'} value={`${formatHumidity(data?.humidity)} %`} />
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Controle rápido</Text>
+        {connectionState !== 'offline' && connectionState !== 'stale' ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Controle rápido</Text>
 
-          {hasFeedback ? (
-            <Animated.View
-              style={[
-                styles.feedbackBanner,
-                {
-                  backgroundColor: feedbackPalette.backgroundColor,
-                  borderColor: feedbackPalette.borderColor,
-                  opacity: feedbackOpacity,
-                },
-              ]}
-            >
-              <MaterialCommunityIcons name={feedbackPalette.icon} size={18} color={feedbackPalette.color} />
-              <Text style={[styles.feedbackText, { color: feedbackPalette.color }]}>{commandError ?? commandFeedback}</Text>
-            </Animated.View>
-          ) : null}
+            {hasFeedback ? (
+              <Animated.View
+                style={[
+                  styles.feedbackBanner,
+                  {
+                    backgroundColor: feedbackPalette.backgroundColor,
+                    borderColor: feedbackPalette.borderColor,
+                    opacity: feedbackOpacity,
+                  },
+                ]}
+              >
+                <MaterialCommunityIcons name={feedbackPalette.icon} size={18} color={feedbackPalette.color} />
+                <Text style={[styles.feedbackText, { color: feedbackPalette.color }]}>{feedback?.message}</Text>
+              </Animated.View>
+            ) : null}
 
-          <View style={styles.controlsWrapper}>
-            {CONTROL_COMMANDS.map(({ command, label, description, icon, matchMode }) => {
-              const isCurrentMode = currentMode === matchMode;
-              const isSending = commandLoading === command;
-              const disabled = Boolean(commandLoading) || isCurrentMode;
-              return (
-                <Pressable
-                  key={command}
-                  onPress={() => handleSendCommand(command)}
-                  disabled={disabled}
-                  style={({ pressed }) => [
-                    styles.controlButton,
-                    isCurrentMode && styles.controlButtonActive,
-                    disabled && styles.controlButtonDisabled,
-                    pressed && !disabled ? styles.controlButtonPressed : null,
-                  ]}
-                >
-                  <View style={styles.controlButtonHeader}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.controlButtonLabel}>{label}</Text>
-                      <Text style={styles.controlButtonDescription}>{description}</Text>
+            <View style={styles.controlsWrapper}>
+              {CONTROL_COMMANDS.map(({ command, label, description, icon, matchMode }) => {
+                const isCurrentMode = currentMode === matchMode;
+                const isSending = commandLoading === command;
+                const disabled = awaitingHeartbeatAck || Boolean(commandLoading) || isCurrentMode;
+                return (
+                  <Pressable
+                    key={command}
+                    onPress={() => handleSendCommand(command)}
+                    disabled={disabled}
+                    style={({ pressed }) => [
+                      styles.controlButton,
+                      isCurrentMode && styles.controlButtonActive,
+                      disabled && styles.controlButtonDisabled,
+                      pressed && !disabled ? styles.controlButtonPressed : null,
+                    ]}
+                  >
+                    <View style={styles.controlButtonHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.controlButtonLabel}>{label}</Text>
+                        <Text style={styles.controlButtonDescription}>{description}</Text>
+                      </View>
+                      {isSending ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <MaterialCommunityIcons name={icon} size={20} color={colors.primary} />
+                      )}
                     </View>
-                    {isSending ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <MaterialCommunityIcons name={icon} size={20} color={colors.primary} />
-                    )}
-                  </View>
-                  {isCurrentMode ? <Text style={styles.controlStatusPill}>Ativo</Text> : null}
-                </Pressable>
-              );
-            })}
+                    {isCurrentMode ? <Text style={styles.controlStatusPill}>Ativo</Text> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
-        </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -283,6 +373,12 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: spacing.md,
   },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
   title: {
     fontSize: typography.title,
     fontWeight: '700',
@@ -293,12 +389,19 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 4,
   },
+  subtitleOffline: {
+    color: colors.danger,
+    fontWeight: '600',
+  },
   headerBadges: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing.xs,
     marginTop: spacing.sm,
+  },
+  inlineBadge: {
+    marginLeft: 'auto',
   },
   metricsRow: {
     flexDirection: 'row',

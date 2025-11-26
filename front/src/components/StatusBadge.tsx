@@ -1,5 +1,5 @@
 import React, { ComponentProps } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { colors, spacing, typography } from '../theme';
@@ -10,6 +10,7 @@ interface StatusBadgeProps {
   label: string;
   type: 'safe' | 'alert' | 'info';
   icon: IconName;
+  style?: StyleProp<ViewStyle>;
 }
 
 const badgeColors = {
@@ -18,12 +19,18 @@ const badgeColors = {
   info: { background: '#E0F2FE', text: colors.rain },
 };
 
-export function StatusBadge({ label, type, icon }: StatusBadgeProps) {
+export function StatusBadge({ label, type, icon, style }: StatusBadgeProps) {
   const palette = badgeColors[type];
   return (
-    <View style={[styles.badge, { backgroundColor: palette.background }]}> 
+    <View style={[styles.badge, style, { backgroundColor: palette.background }]}> 
       <MaterialCommunityIcons name={icon} size={16} color={palette.text} />
-      <Text style={[styles.label, { color: palette.text }]}>{label}</Text>
+      <Text
+        style={[styles.label, { color: palette.text }]}
+        numberOfLines={1}
+        ellipsizeMode="tail"
+      >
+        {label}
+      </Text>
     </View>
   );
 }
@@ -36,9 +43,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     borderRadius: 999,
+    flexShrink: 1,
+    minWidth: 0,
   },
   label: {
     fontSize: typography.caption,
     fontWeight: '600',
+    flexShrink: 1,
+    minWidth: 0,
   },
 });

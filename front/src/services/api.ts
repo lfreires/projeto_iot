@@ -14,7 +14,7 @@ export interface Heartbeat {
 
 const extra = (Constants.expoConfig?.extra ?? {}) as { apiBaseUrl?: string };
 const envBaseUrl = typeof process !== 'undefined' ? process.env?.EXPO_PUBLIC_API_URL : undefined;
-const API_BASE_URL = extra.apiBaseUrl ?? envBaseUrl ?? 'http://10.0.2.2:8000';
+const API_BASE_URL = extra.apiBaseUrl ?? envBaseUrl ?? 'http://35.171.203.111:8000';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const text = await response.text();
